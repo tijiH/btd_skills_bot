@@ -4,8 +4,9 @@ from time import sleep
 from pynput.keyboard import Controller, Listener
 import threading
 import win32gui
+import win32con
 
-# ================== VARIABLES CONFIGURABLES ==================
+# ================== CONFIG VARIABLES ==================
 DEFAULT_KEYS = "&é\"'(-è_çà"
 DEFAULT_INTERVAL = 5000
 DEFAULT_MONEY_KEY = "="
@@ -16,21 +17,27 @@ DEFAULT_FG_COLOR = "white"
 DEFAULT_FONT = ("Arial", 9)
 FOOTER_TEXT = "Made by Kush Crew corporation"
 FOOTER_FONT = ("Old English Text MT", 10)
+PER_KEY_DELAY = 0.1
 
-# =============================================================
-
-def get_active_window_title():
-    hwnd = win32gui.GetForegroundWindow()
-    return win32gui.GetWindowText(hwnd)
+# =====================================================
 
 def list_open_windows():
-    """Retourne une liste des fenêtres visibles."""
+    """Returns a list of visible windows."""
     windows = []
     def enum_handler(hwnd, ctx):
         if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
             windows.append(win32gui.GetWindowText(hwnd))
     win32gui.EnumWindows(enum_handler, None)
     return windows
+
+def bring_window_to_front(window_title):
+    """Bring the target window to the front."""
+    hwnd = win32gui.FindWindow(None, window_title)
+    if hwnd:
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        return hwnd
+    return None
 
 class BTDSpammerApp:
     def __init__(self, root):
@@ -41,31 +48,38 @@ class BTDSpammerApp:
         self.running = False
         self.listener = None
         self.stop_key = None
-        self.per_key_delay = 0.1
-        self.target_window = None  # sera choisi dans l’UI
-
-        # --- THEME ---
+        self.target_window = None
+        self.keep_window_on_top = False
         self.bg_color = DEFAULT_BG_COLOR
         self.fg_color = DEFAULT_FG_COLOR
+
         root.configure(bg=self.bg_color)
 
         # --- WINDOW SELECTION ---
         frame_window = tk.LabelFrame(root, text="Target Window", padx=10, pady=5, bg=self.bg_color, fg=self.fg_color)
         frame_window.pack(padx=10, pady=5, fill="x")
 
-        tk.Label(frame_window, text="Select window:", bg=self.bg_color, fg=self.fg_color).pack(side="left")
+        tk.Label(frame_window, text="Select window:", bg=self.bg_color, fg=self.fg_color).grid(row=0, column=0, sticky="w")
         self.window_var = tk.StringVar()
         open_windows = list_open_windows()
         if open_windows:
             self.window_var.set(open_windows[0])
         self.dropdown = tk.OptionMenu(frame_window, self.window_var, *open_windows)
         self.dropdown.config(bg="#2c2c2c", fg="white")
-        self.dropdown.pack(side="left", padx=5)
+        self.dropdown.grid(row=0, column=1, padx=5, sticky="w")
+
+        # Refresh button (icon)
+        self.btn_toggle_top = tk.Button(frame_window, text="Keep Target Always on Top: OFF", command=self.toggle_target_topmost, bg="#9C27B0", fg="white", relief="flat")
+        self.btn_refresh.grid(row=0, column=2, padx=5, sticky="w")
+
+        # Toggle keep target on top (below)
+        self.btn_toggle_top = tk.Button(frame_window, text="Keep Target Always on Top: OFF", 
+                                        command=self.toggle_target_topmost, bg="#FF9800", fg="white", relief="flat")
+        self.btn_toggle_top.grid(row=1, column=0, columnspan=3, pady=5, sticky="w")
 
         # --- MAIN KEYS ---
         frame_main = tk.LabelFrame(root, text="Main Keys", padx=10, pady=5, bg=self.bg_color, fg=self.fg_color)
         frame_main.pack(padx=10, pady=5, fill="x")
-
         tk.Label(frame_main, text="Keys to repeat:", bg=self.bg_color, fg=self.fg_color).pack(side="left", anchor="w")
         self.entry_keys = tk.Entry(frame_main, width=30, bg="#2c2c2c", fg="white", insertbackground="white")
         self.entry_keys.pack(side="left", padx=5)
@@ -82,12 +96,10 @@ class BTDSpammerApp:
         # --- MONEY INPUT ---
         frame_money = tk.LabelFrame(root, text="Money Input", padx=10, pady=5, bg=self.bg_color, fg=self.fg_color)
         frame_money.pack(padx=10, pady=5, fill="x")
-
         tk.Label(frame_money, text="Money key:", bg=self.bg_color, fg=self.fg_color).pack(side="left", anchor="w")
         self.entry_money = tk.Entry(frame_money, width=5, bg="#2c2c2c", fg="white", insertbackground="white")
         self.entry_money.pack(side="left", padx=5)
         self.entry_money.insert(0, DEFAULT_MONEY_KEY)
-
         frame_money_interval = tk.Frame(root, bg=self.bg_color)
         frame_money_interval.pack(padx=10, pady=2, fill="x")
         tk.Label(frame_money_interval, text="Interval (ms):", bg=self.bg_color, fg=self.fg_color).pack(side="left", anchor="w")
@@ -103,19 +115,6 @@ class BTDSpammerApp:
         self.entry_stop.pack(side="left", padx=5)
         self.entry_stop.insert(0, DEFAULT_STOP_KEY)
 
-        # --- WINDOW OPTIONS ---
-        frame_options = tk.LabelFrame(root, text="Window Options", padx=10, pady=5, bg=self.bg_color, fg=self.fg_color)
-        frame_options.pack(padx=10, pady=5, fill="x")
-        self.var_topmost = tk.BooleanVar(value=False)
-        chk_topmost = tk.Checkbutton(
-            frame_options,
-            text="Keep app always on top",
-            variable=self.var_topmost,
-            command=self.toggle_topmost,
-            bg=self.bg_color, fg=self.fg_color, selectcolor=self.bg_color
-        )
-        chk_topmost.pack(anchor="w")
-
         # --- BUTTONS (LEFT ALIGNED) ---
         frame_buttons = tk.Frame(root, bg=self.bg_color)
         frame_buttons.pack(pady=10, anchor="w")
@@ -124,43 +123,62 @@ class BTDSpammerApp:
         self.btn_stop = tk.Button(frame_buttons, text="Stop", command=self.stop_spam, state="disabled", bg="#f44336", fg="white", relief="flat")
         self.btn_stop.pack(side="left", padx=5)
 
-        # --- LED INDICATOR ---
+        # --- LED INDICATOR + FOOTER/STATUS ---
         self.led = tk.Canvas(root, width=20, height=20, bg=self.bg_color, highlightthickness=0)
         self.led.pack(anchor="ne", padx=10, pady=5)
         self.led_circle = self.led.create_oval(2,2,18,18, fill="red")
 
-        # --- STATUS LABEL ---
-        self.status_label = tk.Label(root, text="Spam stopped", bg=self.bg_color, fg="white", font=DEFAULT_FONT)
-        self.status_label.pack(side="bottom", anchor="w", padx=10, pady=5)
+        footer_frame = tk.Frame(root, bg=self.bg_color)
+        footer_frame.pack(side="bottom", fill="x", padx=10, pady=5)
+        self.status_label = tk.Label(footer_frame, text="Spam stopped", bg=self.bg_color, fg="white", font=DEFAULT_FONT)
+        self.status_label.pack(side="left")
+        self.footer = tk.Label(footer_frame, text=FOOTER_TEXT, font=FOOTER_FONT, bg=self.bg_color, fg=self.fg_color)
+        self.footer.pack(side="right")
 
-        # --- FOOTER ---
-        self.footer = tk.Label(root, text=FOOTER_TEXT, font=FOOTER_FONT, bg=self.bg_color, fg=self.fg_color)
-        self.footer.pack(side="bottom", anchor="e", padx=10, pady=5)
+    # ----------------- WINDOW REFRESH -----------------
+    def refresh_windows(self):
+        open_windows = list_open_windows()
+        menu = self.dropdown["menu"]
+        menu.delete(0, "end")
+        for w in open_windows:
+            menu.add_command(label=w, command=lambda value=w: self.window_var.set(value))
+        if open_windows:
+            self.window_var.set(open_windows[0])
+
+    # ----------------- TOGGLE TARGET TOPMOST -----------------
+    def toggle_target_topmost(self):
+        self.keep_window_on_top = not self.keep_window_on_top
+        status = "ON" if self.keep_window_on_top else "OFF"
+        self.btn_toggle_top.config(text=f"Keep Target Always on Top: {status}")
 
     # ----------------- THREADS -----------------
     def spam_keys(self, keys, interval_ms):
         sleep(interval_ms / 1000.0)
         while self.running:
-            if get_active_window_title() == self.target_window:
-                for k in keys:
-                    if not self.running:
-                        return
-                    try:
-                        self.kb.press(k)
-                        self.kb.release(k)
-                    except:
-                        pass
-                    sleep(self.per_key_delay)
+            hwnd = bring_window_to_front(self.target_window)
+            if self.keep_window_on_top and hwnd:
+                win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0,0,0,0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+            for k in keys:
+                if not self.running:
+                    return
+                try:
+                    self.kb.press(k)
+                    self.kb.release(k)
+                except:
+                    pass
+                sleep(PER_KEY_DELAY)
             sleep(interval_ms / 1000.0)
 
     def spam_money(self, key, interval_ms):
         while self.running:
-            if get_active_window_title() == self.target_window:
-                try:
-                    self.kb.press(key)
-                    self.kb.release(key)
-                except:
-                    pass
+            hwnd = bring_window_to_front(self.target_window)
+            if self.keep_window_on_top and hwnd:
+                win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0,0,0,0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+            try:
+                self.kb.press(key)
+                self.kb.release(key)
+            except:
+                pass
             sleep(interval_ms / 1000.0)
 
     # ----------------- KEYBOARD LISTENER -----------------
@@ -177,21 +195,25 @@ class BTDSpammerApp:
         if self.running:
             messagebox.showwarning("Already Running", "The spam is already running.")
             return
+
         keys_str = self.entry_keys.get()
         if not keys_str:
             messagebox.showerror("Error", "Please enter at least one key to repeat.")
             return
         keys = list(keys_str)
+
         try:
             interval = int(self.entry_interval.get())
         except:
             messagebox.showerror("Error", "Invalid interval for main keys.")
             return
+
         stop_key_val = self.entry_stop.get()
         if not stop_key_val or len(stop_key_val) != 1:
             messagebox.showerror("Error", "Please enter exactly one stop key.")
             return
         self.stop_key = stop_key_val
+
         money_key = self.entry_money.get()
         if not money_key or len(money_key) != 1:
             messagebox.showerror("Error", "Please enter exactly one money key.")
@@ -202,7 +224,6 @@ class BTDSpammerApp:
             messagebox.showerror("Error", "Invalid interval for money input.")
             return
 
-        # Fenêtre cible
         self.target_window = self.window_var.get()
 
         self.running = True
@@ -229,10 +250,6 @@ class BTDSpammerApp:
         self.btn_stop.config(state="disabled")
         self.status_label.config(text="Spam stopped")
         messagebox.showinfo("Info", "Stopped via GUI button.")
-
-    # ----------------- TOPMOST -----------------
-    def toggle_topmost(self):
-        self.root.attributes("-topmost", self.var_topmost.get())
 
     # ----------------- LED -----------------
     def update_led(self):

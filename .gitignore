@@ -1,0 +1,22 @@
+# --- IDE ---
+.idea/
+.vscode/
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Virtual env ---
+venv/
+.env/
+*.env
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- Pyinstaller ---
+dist
+build
